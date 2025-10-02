@@ -15,13 +15,13 @@ const app = express();
 
 /* ============= Core config ============= */
 const PORT = Number(process.env.PORT || 4000);
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5175')
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5175')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
 /* ============= Email config ============= */
-// Prefer HTTPS providers (no SMTP timeouts on Render free)
+// Prefer HTTPS providers (avoids SMTP timeouts on Render free)
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
 const RESEND_API_KEY   = process.env.RESEND_API_KEY   || '';
 const PROVIDER =
@@ -39,14 +39,23 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE).toLowerCase() === 'true' || 
 const SMTP_USER   = process.env.SMTP_USER || process.env.EMAIL_USER || '';
 const SMTP_PASS   = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
 
-/* ============= Middleware ============= */
-app.use(cors({
+/* ============= CORS & JSON middleware ============= */
+const corsConfig = {
   origin(origin, cb) {
-    if (!origin || CORS_ORIGINS.includes(origin)) return cb(null, true);
+    // allow server-to-server/tools (no Origin) and allowed web origins
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'), false);
   },
   credentials: true,
-}));
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400, // cache preflight 24h
+};
+
+app.use(cors(corsConfig));
+// Explicitly respond to preflight for ANY path
+app.options('*', cors(corsConfig));
+
 app.use(express.json({ limit: '1mb' }));
 
 /* ============= Email senders ============= */
@@ -68,7 +77,7 @@ if (PROVIDER === 'smtp' && SMTP_USER && SMTP_PASS) {
   });
   smtpTransporter.verify().then(
     () => console.log('✅ SMTP verified'),
-    () => console.warn('⚠️ SMTP verify failed (fallback only)'),
+    (e) => console.warn('⚠️ SMTP verify failed (fallback only):', e?.message || e)
   );
 }
 
@@ -130,7 +139,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'OK',
     message: 'AKIR Restaurant Backend is running',
-    provider: PROVIDER, // keep or remove if you don't want to reveal provider
+    provider: PROVIDER, // remove if you don't want to reveal provider
     emailConfigured:
       (PROVIDER === 'sendgrid' && !!SENDGRID_API_KEY) ||
       (PROVIDER === 'resend' && !!RESEND_API_KEY) ||
