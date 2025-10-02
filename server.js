@@ -1,5 +1,5 @@
 // backend/server.js
-// ESM + dotenv (Render also injects envs in production)
+// ESM + dotenv (Render injects envs in prod)
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -9,24 +9,25 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 import express from 'express';
 import cors from 'cors';
 import nodemailer from 'nodemailer';
-import fetch from 'node-fetch'; // for SendGrid/Resend HTTPS calls
+import fetch from 'node-fetch';
 
 const app = express();
 
-/* ===================== Core ===================== */
+/* ============= Core config ============= */
 const PORT = Number(process.env.PORT || 4000);
 const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5175')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-/* ===================== Email config ===================== */
+/* ============= Email config ============= */
+// Prefer HTTPS providers (no SMTP timeouts on Render free)
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
 const RESEND_API_KEY   = process.env.RESEND_API_KEY   || '';
 const PROVIDER =
   SENDGRID_API_KEY ? 'sendgrid' :
   RESEND_API_KEY   ? 'resend'   :
-  'smtp'; // fallback only if no API key
+  'smtp';
 
 const MAIL_FROM = process.env.MAIL_FROM || 'AKIR Restaurant <akirrestaurants@gmail.com>';
 const MAIL_TO   = process.env.MAIL_TO   || 'akirrestaurants@gmail.com';
@@ -38,37 +39,37 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE).toLowerCase() === 'true' || 
 const SMTP_USER   = process.env.SMTP_USER || process.env.EMAIL_USER || '';
 const SMTP_PASS   = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
 
-/* ===================== Middleware ===================== */
+/* ============= Middleware ============= */
 app.use(cors({
   origin(origin, cb) {
     if (!origin || CORS_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'), false);
   },
-  credentials: true
+  credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
 
-/* ===================== Email senders ===================== */
+/* ============= Email senders ============= */
 let smtpTransporter = null;
 if (PROVIDER === 'smtp' && SMTP_USER && SMTP_PASS) {
   smtpTransporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
-    secure: SMTP_SECURE,          // true only for 465
+    secure: SMTP_SECURE,            // true only for 465
     auth: { user: SMTP_USER, pass: SMTP_PASS },
-    requireTLS: !SMTP_SECURE,     // enforce STARTTLS on 587
+    requireTLS: !SMTP_SECURE,       // enforce STARTTLS on 587
     pool: true,
     maxConnections: 2,
     maxMessages: 50,
     connectionTimeout: 15000,
     greetingTimeout: 10000,
     socketTimeout: 20000,
-    tls: { minVersion: 'TLSv1.2' }
+    tls: { minVersion: 'TLSv1.2' },
   });
-
-  smtpTransporter.verify()
-    .then(() => console.log('✅ SMTP verified:', SMTP_HOST, SMTP_PORT))
-    .catch(err => console.error('❌ SMTP verify failed:', err?.message || err));
+  smtpTransporter.verify().then(
+    () => console.log('✅ SMTP verified'),
+    () => console.warn('⚠️ SMTP verify failed (fallback only)'),
+  );
 }
 
 async function sendWithSendGrid({ to, subject, html }) {
@@ -77,27 +78,21 @@ async function sendWithSendGrid({ to, subject, html }) {
     : [undefined, MAIL_FROM];
 
   const body = {
-    personalizations: [
-      { to: (Array.isArray(to) ? to : [to]).map(e => ({ email: e })) }
-    ],
+    personalizations: [{ to: (Array.isArray(to) ? to : [to]).map(e => ({ email: e })) }],
     from: name ? { name, email: addr } : { email: addr },
     subject,
-    content: [{ type: 'text/html', value: html }]
+    content: [{ type: 'text/html', value: html }],
   };
 
   const resp = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${SENDGRID_API_KEY}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
-
-  if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`SendGrid ${resp.status}: ${t}`);
-  }
+  if (!resp.ok) throw new Error(`SendGrid ${resp.status}: ${await resp.text()}`);
 }
 
 async function sendWithResend({ to, subject, html }) {
@@ -105,14 +100,9 @@ async function sendWithResend({ to, subject, html }) {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      from: MAIL_FROM,
-      to: Array.isArray(to) ? to : [to],
-      subject,
-      html
-    })
+    body: JSON.stringify({ from: MAIL_FROM, to: Array.isArray(to) ? to : [to], subject, html }),
   });
   if (!resp.ok) throw new Error(`Resend ${resp.status}: ${await resp.text()}`);
 }
@@ -123,7 +113,7 @@ async function sendWithSMTP({ to, subject, html }) {
     from: MAIL_FROM,
     to: Array.isArray(to) ? to.join(',') : to,
     subject,
-    html
+    html,
   });
 }
 
@@ -133,14 +123,14 @@ async function sendEmail({ to, subject, html }) {
   return sendWithSMTP({ to, subject, html });
 }
 
-/* ===================== Routes ===================== */
+/* ============= Routes ============= */
 app.get('/', (_req, res) => res.type('text/plain').send('AKIR Restaurant Backend'));
 
 app.get('/health', (_req, res) => {
   res.json({
     status: 'OK',
     message: 'AKIR Restaurant Backend is running',
-    provider: PROVIDER,
+    provider: PROVIDER, // keep or remove if you don't want to reveal provider
     emailConfigured:
       (PROVIDER === 'sendgrid' && !!SENDGRID_API_KEY) ||
       (PROVIDER === 'resend' && !!RESEND_API_KEY) ||
@@ -149,33 +139,7 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/debug/email-provider', (_req, res) => {
-  res.json({
-    provider: PROVIDER,
-    hasSendGridKey: !!SENDGRID_API_KEY,
-    hasResendKey: !!RESEND_API_KEY,
-    hasSMTP: !!(SMTP_USER && SMTP_PASS)
-  });
-});
-
-app.get('/debug/test-email', async (req, res) => {
-  try {
-    const to = (req.query.to || MAIL_TO)?.toString();
-    if (!to) return res.status(400).json({ ok: false, error: 'No recipient' });
-    await sendEmail({
-      to,
-      subject: 'AKIR Restaurant — email test',
-      html: `<p>Email provider: <b>${PROVIDER}</b></p><p>${new Date().toISOString()}</p>`
-    });
-    res.json({ ok: true, provider: PROVIDER, sentTo: to });
-  } catch (e) {
-    console.error('Test email failed:', e);
-    res.status(500).json({ ok: false, provider: PROVIDER, error: String(e) });
-  }
-});
-
 app.post('/api/reservations', async (req, res) => {
-  console.log('POST /api/reservations body =', req.body);
   try {
     const { name, email, phone, date, time, guests, message, specialRequests } = req.body || {};
     if (!name || !email || !phone || !date || !time || !guests) {
@@ -206,10 +170,9 @@ app.post('/api/reservations', async (req, res) => {
 
     await Promise.all([
       sendEmail({ to: MAIL_TO, subject: adminSubject, html: adminHtml }),
-      sendEmail({ to: email,   subject: customerSubject, html: customerHtml })
+      sendEmail({ to: email,   subject: customerSubject, html: customerHtml }),
     ]);
 
-    console.log('✅ Reservation emails sent via', PROVIDER);
     return res.json({ success: true, message: 'Reservation request received', reservationId: `AKIR-${Date.now()}` });
   } catch (error) {
     console.error('Error processing reservation:', error);
@@ -231,9 +194,8 @@ app.post('/api/contact', async (req, res) => {
         <p><b>Name:</b> ${name}<br/><b>Email:</b> ${email}</p>
         <p><b>Subject:</b> ${subject || 'General Inquiry'}</p>
         <pre style="white-space:pre-wrap">${message}</pre>
-      `
+      `,
     });
-    console.log('✅ Contact email sent via', PROVIDER);
     return res.json({ success: true, message: 'Contact form submitted successfully' });
   } catch (error) {
     console.error('Error processing contact form:', error);
@@ -243,22 +205,4 @@ app.post('/api/contact', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 AKIR Restaurant Backend running on port ${PORT}`);
-  console.log(`📧 Email provider: ${PROVIDER}`);
-  console.log(`🌐 Health: http://localhost:${PORT}/health`);
-  logConfig();
 });
-
-function logConfig() {
-  console.log('⚙️  Config:', {
-    PORT,
-    CORS_ORIGINS,
-    provider: PROVIDER,
-    hasSendGridKey: !!SENDGRID_API_KEY,
-    hasResendKey: !!RESEND_API_KEY,
-    SMTP_HOST, SMTP_PORT, SMTP_SECURE,
-    SMTP_USER: SMTP_USER ? '***' : '(missing)',
-    SMTP_PASS: SMTP_PASS ? '***' : '(missing)',
-    MAIL_FROM: MAIL_FROM || '(missing)',
-    MAIL_TO: MAIL_TO || '(missing)',
-  });
-}
