@@ -9,7 +9,7 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 import express from 'express';
 import cors from 'cors';
 import nodemailer from 'nodemailer';
-import fetch from 'node-fetch';
+import fetch from 'node-fetch'; // keep if your package.json includes node-fetch
 
 const app = express();
 
@@ -50,7 +50,7 @@ const SMTP_PASS   = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
 /* ============= CORS & JSON middleware ============= */
 const corsConfig = {
   origin(origin, cb) {
-    // Allow server-to-server/tools (no Origin) and exact allowlist matches
+    // Allow server-to-server/tools (no Origin), explicit allowlist, or patterns
     if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     if (ALLOWED_PATTERNS.some(re => re.test(origin))) return cb(null, true);
@@ -62,13 +62,11 @@ const corsConfig = {
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   maxAge: 86400,             // cache preflight 24h
-  optionsSuccessStatus: 204, // ensure OPTIONS returns 204 (not 200/500)
+  optionsSuccessStatus: 204, // ensure OPTIONS returns 204 (not 500)
 };
 
 app.use(cors(corsConfig));
-// Handle ALL preflights explicitly
-app.options('*', cors(corsConfig));
-
+app.options('*', cors(corsConfig)); // handle all preflights
 app.use(express.json({ limit: '1mb' }));
 
 /* ============= Email senders ============= */
