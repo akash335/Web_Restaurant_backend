@@ -15,10 +15,18 @@ const app = express();
 
 /* ============= Core config ============= */
 const PORT = Number(process.env.PORT || 4000);
+
+// Comma-separated explicit origins (exact matches)
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5175')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+
+// Optional wildcard patterns (regex) for convenient preview URLs, etc.
+const ALLOWED_PATTERNS = [
+  /^http:\/\/localhost:5175$/,
+  /^https:\/\/web-restaurant-frontend.*\.vercel\.app$/, // all your Vercel preview/prod URLs
+];
 
 /* ============= Email config ============= */
 // Prefer HTTPS providers (avoids SMTP timeouts on Render free)
@@ -42,18 +50,23 @@ const SMTP_PASS   = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
 /* ============= CORS & JSON middleware ============= */
 const corsConfig = {
   origin(origin, cb) {
-    // allow server-to-server/tools (no Origin) and allowed web origins
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error('Not allowed by CORS'), false);
+    // Allow server-to-server/tools (no Origin) and exact allowlist matches
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    if (ALLOWED_PATTERNS.some(re => re.test(origin))) return cb(null, true);
+
+    // IMPORTANT: don't throw here — return false so preflight doesn't 500
+    return cb(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  maxAge: 86400, // cache preflight 24h
+  maxAge: 86400,             // cache preflight 24h
+  optionsSuccessStatus: 204, // ensure OPTIONS returns 204 (not 200/500)
 };
 
 app.use(cors(corsConfig));
-// Explicitly respond to preflight for ANY path
+// Handle ALL preflights explicitly
 app.options('*', cors(corsConfig));
 
 app.use(express.json({ limit: '1mb' }));
