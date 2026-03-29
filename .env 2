@@ -1,9 +1,0 @@
-PORT=4000
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=akirrestaurants@gmail.com
-SMTP_PASS=ugancgymjygmoyvz
-MAIL_FROM="AKIR Restaurant <akirrestaurants@gmail.com>"
-MAIL_TO=akirrestaurants@gmail.com
-CORS_ORIGINS=http://localhost:5175
