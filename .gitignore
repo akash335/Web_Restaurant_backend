@@ -1,6 +1,11 @@
 
 # secrets
 .env
+<<<<<<< HEAD
 node_modules
 dist
+=======
+node_modules/
+.env
+>>>>>>> aef4d17c4e05cc6699602df53d67b58c8ad4b705
 .DS_Store
