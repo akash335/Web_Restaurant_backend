@@ -1,6 +1,6 @@
 # AKIR Restaurant Backend
 
-<<<<<<< HEAD
+
 Backend API for the AKIR Restaurant website.
 
 ---
@@ -74,12 +74,10 @@ This is the backend API for the AKIR Restaurant website.
    ```bash
    npm start
    ```
->>>>>>> aef4d17c4e05cc6699602df53d67b58c8ad4b705
 
 ## API Endpoints
 
 ### Health Check
-<<<<<<< HEAD
 
 * **GET** `/health`
 * Returns server status and timestamp
@@ -211,4 +209,3 @@ For production deployment:
 4. Use a process manager like PM2
 5. Set up SSL/HTTPS
 # Web_Restaurant_backend
->>>>>>> aef4d17c4e05cc6699602df53d67b58c8ad4b705
