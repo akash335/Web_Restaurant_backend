@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
-import nodemailer from 'nodemailer';
+import axios from 'axios';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -23,48 +23,75 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 
-/* ================ Email (SMTP / Gmail) ================ */
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_SECURE = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-const SMTP_USER = process.env.SMTP_USER || 'akirrestaurants@gmail.com';
-const SMTP_PASS = process.env.SMTP_PASS || '';
-
+const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 const MAIL_FROM = process.env.MAIL_FROM || 'AKIR Restaurant <akirrestaurants@gmail.com>';
 const MAIL_TO = process.env.MAIL_TO || 'akirrestaurants@gmail.com';
 
-const transporter = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: SMTP_PORT,
-  secure: SMTP_SECURE,
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASS,
-  },
-});
-
-async function verifySmtpIfConfigured() {
-  if (!SMTP_USER || !SMTP_PASS) return false;
-  try {
-    await transporter.verify();
-    return true;
-  } catch (err) {
-    console.error('SMTP verify failed:', err?.message || err);
-    return false;
+function parseFrom(from) {
+  if (from.includes('<')) {
+    const name = from.split('<')[0].trim();
+    const email = from.split('<')[1].replace('>', '').trim();
+    return { name, email };
   }
+  return { name: undefined, email: from.trim() };
 }
 
-async function sendWithSMTP({ to, subject, html }) {
-  if (!SMTP_USER || !SMTP_PASS) {
-    throw new Error('SMTP credentials missing');
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendWithBrevoOnce({ to, subject, html }) {
+  if (!BREVO_API_KEY) {
+    throw new Error('BREVO_API_KEY missing');
   }
 
-  await transporter.sendMail({
-    from: MAIL_FROM,
-    to: Array.isArray(to) ? to.join(', ') : to,
-    subject,
-    html,
-  });
+  const sender = parseFrom(MAIL_FROM);
+  const recipients = (Array.isArray(to) ? to : [to]).map((email) => ({ email }));
+
+  const res = await axios.post(
+    'https://api.brevo.com/v3/smtp/email',
+    {
+      sender: sender.name ? sender : { email: sender.email },
+      to: recipients,
+      subject,
+      htmlContent: html,
+      replyTo: { email: sender.email },
+    },
+    {
+      headers: {
+        'api-key': BREVO_API_KEY,
+        'Content-Type': 'application/json',
+        accept: 'application/json',
+      },
+      timeout: 15000,
+    }
+  );
+
+  return res.data;
+}
+
+async function sendWithBrevo({ to, subject, html }) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await sendWithBrevoOnce({ to, subject, html });
+    } catch (err) {
+      lastError = err;
+      const code = err?.code || err?.cause?.code;
+
+      console.error(`Brevo attempt ${attempt} failed:`, err.response?.data || code || err.message);
+
+      if (attempt < 3 && (code === 'ECONNRESET' || code === 'ETIMEDOUT')) {
+        await sleep(1000 * attempt);
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  throw lastError;
 }
 
 function escapeHtml(value) {
@@ -141,30 +168,21 @@ app.get('/', (_req, res) => {
   res.type('text/plain').send('AKIR Restaurant Backend');
 });
 
-app.get('/health', async (_req, res) => {
-  const smtpConfigured = !!SMTP_USER && !!SMTP_PASS;
-  const smtpVerified = smtpConfigured ? await verifySmtpIfConfigured() : false;
-
+app.get('/health', (_req, res) => {
   res.json({
     status: 'OK',
     message: 'AKIR Restaurant Backend is running',
-    provider: 'smtp',
-    emailConfigured: smtpConfigured,
-    smtpVerified,
+    provider: 'brevo',
+    emailConfigured: !!BREVO_API_KEY,
     timestamp: new Date().toISOString(),
   });
 });
 
 if (ENABLE_DEBUG_ROUTES) {
-  app.get('/debug/email-provider', async (_req, res) => {
-    const smtpConfigured = !!SMTP_USER && !!SMTP_PASS;
-    const smtpVerified = smtpConfigured ? await verifySmtpIfConfigured() : false;
-
+  app.get('/debug/email-provider', (_req, res) => {
     res.json({
-      provider: 'smtp',
-      hasSmtpUser: !!SMTP_USER,
-      hasSmtpPass: !!SMTP_PASS,
-      smtpVerified,
+      provider: 'brevo',
+      hasBrevoApiKey: !!BREVO_API_KEY,
       mailFrom: MAIL_FROM,
       mailTo: MAIL_TO,
     });
@@ -177,18 +195,18 @@ if (ENABLE_DEBUG_ROUTES) {
         return res.status(400).json({ ok: false, error: 'No recipient' });
       }
 
-      await sendWithSMTP({
+      await sendWithBrevo({
         to,
-        subject: 'AKIR Restaurant — SMTP Test',
-        html: `<p>SMTP test successful at ${new Date().toISOString()}</p>`,
+        subject: 'AKIR Restaurant — Brevo Test',
+        html: `<p>Brevo test successful at ${new Date().toISOString()}</p>`,
       });
 
-      return res.json({ ok: true, provider: 'smtp', sentTo: to });
+      return res.json({ ok: true, provider: 'brevo', sentTo: to });
     } catch (e) {
       console.error('Test email failed:', e);
       return res.status(500).json({
         ok: false,
-        provider: 'smtp',
+        provider: 'brevo',
         error: 'Failed to send test email',
       });
     }
@@ -248,14 +266,12 @@ app.post('/api/reservations', formRateLimiter, async (req, res) => {
         <b>Email:</b> ${safeEmail}<br/>
         <b>Phone:</b> ${safePhone}
       </p>
-
       <h3>Reservation Details</h3>
       <p>
         <b>Date:</b> ${safeDate}<br/>
         <b>Time:</b> ${safeTime}<br/>
         <b>Guests:</b> ${safeGuests}
       </p>
-
       ${notes ? `<p><b>Special Requests:</b> ${safeNotes}</p>` : ''}
     `;
 
@@ -273,22 +289,32 @@ app.post('/api/reservations', formRateLimiter, async (req, res) => {
       <p><b>AKIR Restaurant</b></p>
     `;
 
-    await Promise.all([
-      sendWithSMTP({
+    const results = await Promise.allSettled([
+      sendWithBrevo({
         to: MAIL_TO,
         subject: `New Reservation Request - ${name}`,
         html: adminHtml,
       }),
-      sendWithSMTP({
+      sendWithBrevo({
         to: email,
         subject: 'Reservation Request Received - AKIR Restaurant',
         html: customerHtml,
       }),
     ]);
 
+    const ownerOk = results[0].status === 'fulfilled';
+    const customerOk = results[1].status === 'fulfilled';
+
+    if (!ownerOk && !customerOk) {
+      throw new Error('Both reservation emails failed');
+    }
+
     return res.json({
       success: true,
-      message: 'Reservation request received successfully',
+      message:
+        ownerOk && customerOk
+          ? 'Reservation request received successfully'
+          : 'Reservation saved, but one confirmation email may be delayed',
       reservationId: `AKIR-${Date.now()}`,
     });
   } catch (error) {
@@ -330,22 +356,32 @@ app.post('/api/contact', formRateLimiter, async (req, res) => {
       <p>Heads up: our reply may sometimes land in Spam/Promotions.</p>
     `;
 
-    await Promise.all([
-      sendWithSMTP({
+    const results = await Promise.allSettled([
+      sendWithBrevo({
         to: MAIL_TO,
         subject: `Contact Form: ${subject}`,
         html,
       }),
-      sendWithSMTP({
+      sendWithBrevo({
         to: email,
         subject: 'We received your message - AKIR Restaurant',
         html: replyHtml,
       }),
     ]);
 
+    const ownerOk = results[0].status === 'fulfilled';
+    const customerOk = results[1].status === 'fulfilled';
+
+    if (!ownerOk && !customerOk) {
+      throw new Error('Both contact emails failed');
+    }
+
     return res.json({
       success: true,
-      message: 'Contact form submitted successfully',
+      message:
+        ownerOk && customerOk
+          ? 'Contact form submitted successfully'
+          : 'Message received, but one confirmation email may be delayed',
     });
   } catch (error) {
     console.error('Error processing contact form:', error);
@@ -367,11 +403,10 @@ app.listen(PORT, () => {
   console.log('⚙️  Config:', {
     PORT,
     ALLOWED_ORIGINS,
-    provider: 'smtp',
-    hasSmtpUser: !!SMTP_USER,
-    hasSmtpPass: !!SMTP_PASS,
+    provider: 'brevo',
+    hasBrevoApiKey: !!BREVO_API_KEY,
     MAIL_FROM,
     MAIL_TO,
     ENABLE_DEBUG_ROUTES,
   });
-});
+}); 
